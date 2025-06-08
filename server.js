@@ -1,12 +1,11 @@
-// server.js
 const express = require("express");
 const http = require("http");
 const { Server } = require("socket.io");
-const { v4: uuidv4 } = require("uuid");
 const cors = require("cors");
 
 const app = express();
-app.use(cors({ origin: "*", methods: ["GET", "POST"], credentials: true }));
+app.use(cors());
+
 const server = http.createServer(app);
 const io = new Server(server, {
   cors: {
@@ -15,86 +14,91 @@ const io = new Server(server, {
   }
 });
 
-app.use(express.static("public"));
-
 const lobbies = new Map();
-const MAX_PLAYERS = 20;
-const AVATAR_COUNT = 20;
-
-function generateAvatars() {
-  const all = Array.from({ length: AVATAR_COUNT }, (_, i) => `Avatar${i + 1}.png`);
-  return all.sort(() => 0.5 - Math.random());
-}
 
 io.on("connection", (socket) => {
   socket.on("createLobby", ({ lobbyName, nickname }) => {
-    const id = uuidv4();
-    const avatars = generateAvatars();
+    const lobbyId = generateId();
     const player = {
       id: socket.id,
       nickname,
-      alive: true,
-      avatar: avatars.pop()
+      avatar: null,
+      role: null
     };
     const lobby = {
-      id,
+      id: lobbyId,
       name: lobbyName,
-      owner: nickname,
       ownerId: socket.id,
-      players: [player],
-      avatars,
-      votes: {},
-      phase: "waiting",
-      accused: null,
-      finalVotes: [],
-      dayTimerRunning: true
+      players: [player]
     };
-    lobbies.set(id, lobby);
-    socket.join(id);
-    const fullList = Array.from({ length: MAX_PLAYERS }).map((_, i) => lobby.players[i] || { empty: true });
-    io.to(socket.id).emit("lobbyJoined", { lobby, players: fullList });
+    lobbies.set(lobbyId, lobby);
+    socket.join(lobbyId);
+    emitLobbyUpdate(lobbyId);
   });
 
   socket.on("getLobbies", () => {
-    const list = Array.from(lobbies.values()).map((l) => ({
-      id: l.id,
-      name: l.name,
-      players: l.players
-    }));
-    io.to(socket.id).emit("lobbyList", list);
+    const lobbyList = Array.from(lobbies.values()).map(({ id, name }) => ({ id, name }));
+    socket.emit("lobbyList", lobbyList);
   });
 
   socket.on("joinLobby", ({ lobbyId, nickname }) => {
     const lobby = lobbies.get(lobbyId);
-    if (!lobby || lobby.players.length >= MAX_PLAYERS) return;
-    const avatar = lobby.avatars.pop();
-    const player = { id: socket.id, nickname, alive: true, avatar };
+    if (!lobby || lobby.players.length >= 20) return;
+    const player = {
+      id: socket.id,
+      nickname,
+      avatar: null,
+      role: null
+    };
     lobby.players.push(player);
     socket.join(lobbyId);
-    const fullList = Array.from({ length: MAX_PLAYERS }).map((_, i) => lobby.players[i] || { empty: true });
-    io.to(lobbyId).emit("lobbyJoined", { lobby, players: fullList });
+    emitLobbyUpdate(lobbyId);
   });
 
   socket.on("startGame", ({ lobbyId }) => {
     const lobby = lobbies.get(lobbyId);
     if (!lobby || socket.id !== lobby.ownerId) return;
 
-    const shuffled = [...lobby.players].filter(p => !p.empty).sort(() => 0.5 - Math.random());
-    const gulyabani = shuffled[0];
-    const others = shuffled.slice(1);
+    const shuffled = [...lobby.players].sort(() => 0.5 - Math.random());
+    shuffled[0].role = "Gulyabani";
+    for (let i = 1; i < shuffled.length; i++) {
+      shuffled[i].role = "Vatandas";
+    }
 
-    lobby.gulyabaniId = gulyabani.id;
-    lobby.phase = "night";
+    shuffled.forEach(p => {
+      io.to(p.id).emit("yourRole", { role: p.role });
+    });
 
-    io.to(gulyabani.id).emit("roleAssigned", { role: "Gulyabani" });
-    others.forEach(p => io.to(p.id).emit("roleAssigned", { role: "Vatandaş" }));
-    io.to(lobbyId).emit("gameStarted");
-
-    io.to(gulyabani.id).emit("nightPhase", { players: others });
+    io.to(lobbyId).emit("phaseChange", { phase: "night" });
+    setTimeout(() => {
+      io.to(lobbyId).emit("phaseChange", { phase: "day" });
+    }, 10000);
   });
 });
 
-const PORT = process.env.PORT || 3000;
-server.listen(PORT, () => {
-  console.log(`Sunucu ${PORT} portunda çalışıyor`);
+function emitLobbyUpdate(lobbyId) {
+  const lobby = lobbies.get(lobbyId);
+  if (!lobby) return;
+  const playersWithAvatars = Array.from({ length: 20 }, (_, i) => {
+    const player = lobby.players[i];
+    return player
+      ? { nickname: player.nickname, avatar: player.avatar || `Avatar${i + 1}.png` }
+      : { empty: true };
+  });
+  io.to(lobbyId).emit("lobbyJoined", {
+    lobby: {
+      id: lobby.id,
+      name: lobby.name,
+      ownerId: lobby.ownerId
+    },
+    players: playersWithAvatars
+  });
+}
+
+function generateId() {
+  return Math.random().toString(36).substring(2, 8);
+}
+
+server.listen(3000, () => {
+  console.log("Server running on port 3000");
 });
