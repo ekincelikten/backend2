@@ -1,11 +1,13 @@
-
 const express = require("express");
 const http = require("http");
 const { Server } = require("socket.io");
 const cors = require("cors");
 
 const app = express();
-app.use(cors());
+app.use(cors({
+  origin: "*",
+  methods: ["GET", "POST"]
+}));
 
 const server = http.createServer(app);
 const io = new Server(server, {
@@ -54,26 +56,6 @@ io.on("connection", (socket) => {
     lobby.players.push(player);
     socket.join(lobbyId);
     emitLobbyUpdate(lobbyId);
-  });
-
-  socket.on("startGame", ({ lobbyId }) => {
-    const lobby = lobbies.get(lobbyId);
-    if (!lobby || socket.id !== lobby.ownerId) return;
-
-    const shuffled = [...lobby.players].sort(() => 0.5 - Math.random());
-    shuffled[0].role = "Gulyabani";
-    for (let i = 1; i < shuffled.length; i++) {
-      shuffled[i].role = "Vatandas";
-    }
-
-    shuffled.forEach(p => {
-      io.to(p.id).emit("yourRole", { role: p.role });
-    });
-
-    io.to(lobbyId).emit("phaseChange", { phase: "night" });
-    setTimeout(() => {
-      io.to(lobbyId).emit("phaseChange", { phase: "day" });
-    }, 10000);
   });
 });
 
